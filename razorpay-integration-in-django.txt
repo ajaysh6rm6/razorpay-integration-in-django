@@ -1,0 +1,155 @@
+STEP1>>>get Key ID and Key Secret [https://razorpay.com/] and add it into setting.py
+
+#razorpay
+RAZORPAY_KEY_ID = "YOUR_KEY_ID"
+RAZORPAY_KEY_SECRET = "YOUR_KEY_SECRET"
+#razorpay
+
+#Before we move ahead let’s install razorpay’s python package.
+pip install razorpay
+
+
+STEP2>>>models.py
+
+#razorpay
+from django.utils.translation import gettext_lazy as _
+class PaymentStatus:
+    SUCCESS = "Success"
+    FAILURE = "Failure"
+    PENDING = "Pending"
+  
+class paymentOrder(models.Model):
+    name = models.CharField(_("Customer Name"), max_length=254, blank=False, null=False)
+    amount = models.FloatField(_("Amount"), null=False, blank=False)
+    status = models.CharField(
+        _("Payment Status"),
+        default=PaymentStatus.PENDING,
+        max_length=254,
+        blank=False,
+        null=False,
+    )
+    provider_order_id = models.CharField(
+        _("Order ID"), max_length=40, null=False, blank=False
+    )
+    payment_id = models.CharField(
+        _("Payment ID"), max_length=36, null=False, blank=False
+    )
+    signature_id = models.CharField(
+        _("Signature ID"), max_length=128, null=False, blank=False
+    )
+    class Meta:
+        db_table = 'paymentOrder' 
+
+    def __str__(self):
+        return f"{self.id}-{self.name}-{self.status}"         
+#razorpay
+
+
+STEP3>>>url.py
+
+#razorpay
+path('planpage/',views.planpage,name="planpage" ), 
+path("callback/", views.callback, name="callback"),
+#razorpay
+
+
+STEP4>>>views.py
+from django.shortcuts import render
+from diginxthltadmin.models import paymentOrder
+import json
+import urllib.parse
+from django.views.decorators.csrf import csrf_exempt
+import razorpay
+from django.conf import settings
+#razorpay
+def planpage(request):  
+    if request.method == "POST":
+		_payloadDict=urllib.parse.parse_qs(request.body.decode('utf-8'))
+        reqSectionId = ''.join(_payloadDict['section_id'])
+		name = ''.join(_payloadDict['emailId'])
+        amount = ''.join(_payloadDict['planPricing'])
+        client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET))
+        razorpay_order = client.order.create({"amount": int(amount) * 100, "currency": "INR", "payment_capture": "1"})
+        order = paymentOrder.objects.create(name=name, amount=amount, provider_order_id=razorpay_order["id"])
+        order.save()
+        return render(request,"payment.html",{"callback_url": "http://" + "127.0.0.1:80" + "/selfcare/callback/","razorpay_key": settings.RAZORPAY_KEY_ID,"order": order,},)
+    
+from diginxthltadmin.models import PaymentStatus
+@csrf_exempt
+def callback(request):
+    def verify_signature(response_data):
+        client = razorpay.Client(auth=(settings.RAZORPAY_KEY_ID, settings.RAZORPAY_KEY_SECRET))
+        return client.utility.verify_payment_signature(response_data)
+
+    if "razorpay_signature" in request.POST:
+        payment_id = request.POST.get("razorpay_payment_id", "")
+        provider_order_id = request.POST.get("razorpay_order_id", "")
+        signature_id = request.POST.get("razorpay_signature", "")
+        order = paymentOrder.objects.get(provider_order_id=provider_order_id)
+        order.payment_id = payment_id
+        order.signature_id = signature_id
+        order.save()
+        if not verify_signature(request.POST):
+            order.status = PaymentStatus.FAILURE
+            order.save()
+            return render(request, "callback.html", context={"success_header": order.status})
+        else:
+            order.status = PaymentStatus.SUCCESS
+            order.save()
+            return render(request, "callback.html", context={"success_header": order.status})
+    else:
+        payment_id = json.loads(request.POST.get("error[metadata]")).get("payment_id")
+        provider_order_id = json.loads(request.POST.get("error[metadata]")).get(
+            "order_id"
+        )
+        order = paymentOrder.objects.get(provider_order_id=provider_order_id)
+        order.payment_id = payment_id
+        order.status = PaymentStatus.FAILURE
+        order.save()
+        return render(request, "callback.html", context={"success_header": order.status})
+#razorpay
+
+
+STEP5>>>templates
+
+#razorpay
+>>payment.html
+<div class="content">
+	<h1>Razorpay payment gateway</h1>
+	<form method="POST">
+        <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+        <script>
+        var options = {
+            key: "{{razorpay_key}}",
+            amount: "{{order.amount}}", 
+            currency: "INR",
+            name: "{{order.name}}",
+            description: "Test Transaction",
+            image: "{% static 'images/aural-wellness-graph.png' %}",
+            order_id: "{{order.provider_order_id}}",
+            callback_url: "{{callback_url}}",
+            redirect: true,
+            prefill: {
+                "name": "",
+                "email": "",
+                "contact": ""
+            },
+            notes: {
+                "address": "Razorpay Corporate Office"
+            },
+            theme: {
+                "color": "#3399cc"
+            }
+        };
+        var rzp1 = new Razorpay(options);
+        rzp1.open();
+        </script>
+        <input type="hidden" custom="Hidden Element" name="hidden">
+    </form>
+</div>
+
+>>callback.html
+<div class="content">
+	<h1>{{success_header}}</h1>
+</div>
+#razorpay
